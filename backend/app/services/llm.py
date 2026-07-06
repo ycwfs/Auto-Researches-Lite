@@ -244,7 +244,7 @@ class LLMService:
         system = self._p("chat", context=context)
         convo = "\n".join(f"{role}: {content}" for role, content in history[-8:])
         prompt = f"{convo}\nuser: {message}\nassistant:"
-        return self._complete(prompt, system=system, max_tokens=800) or _mock_chat(context, message)
+        return self._complete(prompt, system=system, max_tokens=8192) or _mock_chat(context, message)
 
     def _complete(self, prompt: str, system: str = "", max_tokens: int = 800) -> str:
         try:
