@@ -31,6 +31,10 @@ class PaperOut(BaseModel):
     # Whether the paper has parsed full text (MinerU/pypdf, not the abstract fallback) —
     # gates the per-paper chat, which needs a document to ground answers in.
     has_fulltext: bool = False
+    # False once a forced re-parse proved the paper's full text is unrecoverable
+    # (unfetchable URL, not on arXiv) — the frontend stops auto-retrying it. Defaults
+    # True (recoverable) for new/legacy papers so the one on-demand auto-retry runs.
+    fulltext_recoverable: bool = True
     # When the paper was discovered (added to the project). Optional: legacy rows
     # predating the column may be NULL.
     created_at: datetime | None = None

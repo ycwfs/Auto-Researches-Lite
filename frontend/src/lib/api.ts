@@ -135,6 +135,7 @@ export interface Paper {
   document_id?: number | null;
   code_status?: string; // "ok" when a code-repository analysis is available
   has_fulltext?: boolean; // parsed full text (MinerU/pypdf) present — gates the per-paper chat
+  fulltext_recoverable?: boolean; // false once a forced re-parse proved full text is unrecoverable
   created_at?: string | null;
 }
 export interface PaperDocument {

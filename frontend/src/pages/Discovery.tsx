@@ -950,7 +950,9 @@ function PaperCard({
   // Auto-recovery: a paper stuck on the abstract fallback re-parses itself the first
   // time its summary is opened — a fresh MinerU parse with the automatic arXiv-by-title
   // fallback, then re-summarize. No button; if it still can't be recovered (not on
-  // arXiv), the manual "Upload PDF" appears.
+  // arXiv), the manual "Upload PDF" appears. Once a forced re-parse has already proven
+  // the full text unrecoverable (fulltext_recoverable === false), we stop auto-retrying
+  // — the URL is unfetchable, so another attempt would only waste a fetch.
   const reparse = async () => {
     if (resumRunning) return;
     setResumKind("reparse");
@@ -962,7 +964,10 @@ function PaperCard({
   };
   const autoReparsedRef = useRef(false);
   useEffect(() => {
-    if (showSummary && p.has_fulltext === false && !autoReparsedRef.current && !resumRunning) {
+    if (
+      showSummary && p.has_fulltext === false && p.fulltext_recoverable !== false
+      && !autoReparsedRef.current && !resumRunning
+    ) {
       autoReparsedRef.current = true;  // fire once per card
       void reparse();
     }

@@ -98,12 +98,14 @@ def list_papers(
     doc_ids = [p.document_id for p in papers if p.document_id]
     code: dict[int, str] = {}
     fulltext: dict[int, bool] = {}
+    recoverable: dict[int, bool] = {}
     if doc_ids:
         default_status = {}
-        for doc_id, status_, method, markdown in (
+        for doc_id, status_, method, markdown, recov in (
             db.query(
                 PaperDocument.id, PaperDocument.code_status,
                 PaperDocument.extraction_method, PaperDocument.markdown,
+                PaperDocument.fulltext_recoverable,
             )
             .filter(PaperDocument.id.in_(doc_ids))
             .all()
@@ -111,6 +113,8 @@ def list_papers(
             default_status[doc_id] = status_ or ""
             # Real parsed full text (not the abstract fallback) → chat is grounded.
             fulltext[doc_id] = paper_db.has_real_fulltext(method, markdown)
+            # NULL (legacy row) → recoverable, so the one on-demand auto-retry can run.
+            recoverable[doc_id] = recov is not False
         ov = paper_db.overrides_map(db, project.id, doc_ids)  # this project's own analyses
         for doc_id in doc_ids:
             o = ov.get(doc_id)
@@ -122,6 +126,7 @@ def list_papers(
         item = PaperOut.model_validate(p)
         item.code_status = code.get(p.document_id, "")
         item.has_fulltext = fulltext.get(p.document_id, False)
+        item.fulltext_recoverable = recoverable.get(p.document_id, True)
         out.append(item)
     return out
 
@@ -249,6 +254,7 @@ async def upload_paper_pdf(
         paper_db.link_project(db, project.id, doc, "upload")
     doc.markdown = text  # extract_from_bytes already bounds this
     doc.extraction_method = "upload"
+    doc.fulltext_recoverable = True  # the upload IS the full text — clear any "stuck" mark
     db.commit()
     return _enqueue_resummarize(db, project, user, paper_id, "full_text")
 

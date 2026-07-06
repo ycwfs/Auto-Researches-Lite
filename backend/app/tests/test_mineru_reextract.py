@@ -288,3 +288,129 @@ def test_reuse_only_never_parses_uncached(auth_client, monkeypatch, tmp_path) ->
         assert linked == 1  # still linked to the project's explored set
     finally:
         db.close()
+
+
+# --- Regression: a forced re-extract must only ever UPGRADE, never clobber ------
+def _doc_with(method: str, markdown: str) -> int:
+    """A shared PaperDocument in a given extraction state (OpenReview, unfetchable)."""
+    from app.models.content import PaperDocument
+
+    tag = uuid.uuid4().hex[:8]
+    db = SessionLocal()
+    try:
+        doc = PaperDocument(
+            title=f"Doc {tag}", title_key=f"doc-{tag}",
+            abstract="Only the abstract.", pdf_url="https://openreview.net/pdf/z.pdf",
+            markdown=markdown, extraction_method=method,
+        )
+        db.add(doc)
+        db.commit()
+        return doc.id
+    finally:
+        db.close()
+
+
+def _fake_extract(method: str, text: str):
+    from app.integrations.mineru import ExtractResult
+
+    def _f(*_a, **_k):
+        return ExtractResult(text=text, method=method, chars=len(text), cache_file="")
+
+    return _f
+
+
+def test_reextract_preserves_uploaded_fulltext(tmp_path, monkeypatch) -> None:
+    """Regression: a forced re-extract of a paper whose PDF is unfetchable (OpenReview)
+    must NOT re-fetch over a user upload and clobber it with the abstract fallback."""
+    from app.integrations import mineru
+    from app.models.content import PaperDocument
+    from app.services import paper_db
+
+    doc_id = _doc_with("upload", "FULL UPLOADED BODY TEXT " * 50)
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return _fake_extract("abstract", "# Doc\n\nOnly the abstract.")(*a, **k)
+
+    monkeypatch.setattr(mineru, "extract", _spy)
+    db = SessionLocal()
+    try:
+        doc = db.get(PaperDocument, doc_id)
+        paper_db.ensure_converted(db, doc, tmp_path, force=True)
+        db.refresh(doc)
+        assert doc.extraction_method == "upload"
+        assert "FULL UPLOADED BODY TEXT" in (doc.markdown or "")
+    finally:
+        db.close()
+    assert calls["n"] == 0  # an upload short-circuits before any re-fetch
+
+
+def test_reextract_does_not_downgrade_fulltext(tmp_path, monkeypatch) -> None:
+    """A forced re-extract that falls back to the abstract must keep real full text."""
+    from app.integrations import mineru
+    from app.models.content import PaperDocument
+    from app.services import paper_db
+
+    doc_id = _doc_with("mineru", "REAL PARSED FULL TEXT " * 50)
+    monkeypatch.setattr(mineru, "extract", _fake_extract("abstract", "# Doc\n\nabstract."))
+    db = SessionLocal()
+    try:
+        doc = db.get(PaperDocument, doc_id)
+        paper_db.ensure_converted(db, doc, tmp_path, force=True)
+        db.refresh(doc)
+        assert doc.extraction_method == "mineru"
+        assert "REAL PARSED FULL TEXT" in (doc.markdown or "")
+    finally:
+        db.close()
+
+
+def test_reextract_upgrades_abstract_to_fulltext(tmp_path, monkeypatch) -> None:
+    """The legitimate recovery still works: an abstract-stuck paper upgrades when a
+    forced re-extract finally succeeds (abstract -> full text is allowed)."""
+    from app.integrations import mineru
+    from app.models.content import PaperDocument
+    from app.services import paper_db
+
+    doc_id = _doc_with("abstract", "# Doc\n\nOnly the abstract.")
+    monkeypatch.setattr(mineru, "extract", _fake_extract("mineru", "NEWLY PARSED FULL TEXT " * 50))
+    db = SessionLocal()
+    try:
+        doc = db.get(PaperDocument, doc_id)
+        paper_db.ensure_converted(db, doc, tmp_path, force=True)
+        db.refresh(doc)
+        assert doc.extraction_method == "mineru"
+        assert "NEWLY PARSED FULL TEXT" in (doc.markdown or "")
+    finally:
+        db.close()
+
+
+def test_forced_reparse_failure_marks_unrecoverable(tmp_path, monkeypatch) -> None:
+    """A forced re-parse that still yields the abstract flags the doc unrecoverable so
+    the frontend stops auto-retrying; a first (non-forced) abstract stays recoverable."""
+    from app.integrations import mineru
+    from app.models.content import PaperDocument
+    from app.services import paper_db
+
+    doc_id = _doc_with("abstract", "# Doc\n\nOnly the abstract.")
+    monkeypatch.setattr(mineru, "extract", _fake_extract("abstract", "# Doc\n\nabstract."))
+    db = SessionLocal()
+    try:
+        doc = db.get(PaperDocument, doc_id)
+        assert doc.fulltext_recoverable is True  # default: one auto-retry allowed
+        paper_db.ensure_converted(db, doc, tmp_path, force=True)  # retry still abstract
+        db.refresh(doc)
+        assert doc.fulltext_recoverable is False  # now gated off
+    finally:
+        db.close()
+
+
+def test_paper_list_surfaces_fulltext_recoverable(auth_client: TestClient) -> None:
+    """The paper list exposes fulltext_recoverable so the card can gate auto-reparse."""
+    pid = auth_client.post(
+        "/api/projects", json={"name": "Recov", "keywords": ["x"]}
+    ).json()["id"]
+    paper_id, _ = _stuck_paper(pid)
+    papers = auth_client.get(f"/api/projects/{pid}/discovery/papers").json()
+    row = next(p for p in papers if p["id"] == paper_id)
+    assert row["fulltext_recoverable"] is True  # stuck-but-not-yet-exhausted → recoverable

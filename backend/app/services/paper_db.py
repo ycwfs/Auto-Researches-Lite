@@ -148,8 +148,18 @@ def ensure_converted(
     cache — the recovery path for a paper that previously fell back to the abstract
     (a transient MinerU miss). `max_wait` bounds the MinerU poll: None uses the admin
     budget (on-demand recovery); a bulk caller passes a small cap so one stuck PDF
-    can't block the whole loop."""
+    can't block the whole loop.
+
+    A forced re-extract only ever UPGRADES: it will not re-fetch over a user upload,
+    and it will not downgrade real full text back to the abstract fallback when the
+    re-fetch fails (an unfetchable URL, e.g. OpenReview, or a transient MinerU miss)."""
     if not force and (doc.markdown or "").strip():
+        return doc
+    # A user-uploaded full text is authoritative, and the PDF can't be fetched
+    # server-side (that's the whole reason it was uploaded). A forced re-extract
+    # would only re-fetch the unfetchable URL and clobber the upload with the
+    # abstract fallback — so never re-parse over an upload.
+    if doc.extraction_method == "upload" and (doc.markdown or "").strip():
         return doc
     from app.services import integration_service
 
@@ -163,8 +173,26 @@ def ensure_converted(
         max_wait=wait,
         force=force,
     )
+    # Don't downgrade: if a forced re-extract fell back to the abstract but we
+    # already hold real full text (a prior successful parse or an upload), keep it.
+    had_fulltext = doc.extraction_method in FULLTEXT_METHODS and (doc.markdown or "").strip()
+    if res.method == "abstract" and had_fulltext:
+        logger.info(
+            "re-extract of doc %s fell back to the abstract; keeping existing '%s' full text",
+            doc.id, doc.extraction_method,
+        )
+        return doc
     doc.markdown = res.text
     doc.extraction_method = res.method
+    if res.method == "abstract":
+        # A FORCED re-parse that still can't get full text means the URL is
+        # unfetchable and the paper isn't on arXiv — mark it so the frontend stops
+        # auto-retrying. (A first, non-forced abstract fallback stays recoverable so
+        # the one on-demand auto-retry can still run.)
+        if force:
+            doc.fulltext_recoverable = False
+    else:
+        doc.fulltext_recoverable = True  # real full text obtained → recovered
     # Persist an accessible link when the arXiv-by-title fallback parsed a different
     # (arXiv) URL than the paper's own — so Zotero can link to arXiv, not the
     # unfetchable OpenReview URL.

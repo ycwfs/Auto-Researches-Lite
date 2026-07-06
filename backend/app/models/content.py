@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -96,7 +97,11 @@ class PaperDocument(Base):
     # Zotero attachment/link so it isn't a dead server-side link.
     resolved_pdf_url: Mapped[str] = mapped_column(Text, default="")
     summary: Mapped[str] = mapped_column(Text, default="")  # 5-point structured summary
-    extraction_method: Mapped[str] = mapped_column(String(20), default="")  # mineru|pypdf|abstract
+    extraction_method: Mapped[str] = mapped_column(String(20), default="")  # mineru|pypdf|abstract|upload
+    # False once a forced re-parse still couldn't fetch full text (unfetchable URL, not
+    # on arXiv) — the frontend uses it to stop auto-retrying a paper that can't recover.
+    # NULL on rows predating the column → treated as recoverable (one auto-retry allowed).
+    fulltext_recoverable: Mapped[bool] = mapped_column(Boolean, default=True)
     summary_model: Mapped[str] = mapped_column(String(60), default="")
     # Code repository found in the paper (analogous to the 5-point summary). code_status:
     # "" not yet processed | "none" (missing/broken/empty repo) | "ok" (analyzed).
