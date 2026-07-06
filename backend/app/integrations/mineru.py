@@ -26,6 +26,17 @@ logger = logging.getLogger("far.mineru")
 # A high safety bound only guards against pathological (e.g. 100s-of-pages) PDFs.
 _MAX_CHARS = 200000
 
+# pypdf can emit embedded NUL / C0 control bytes from a PDF's text layer, and a
+# Postgres text column rejects NUL ("A string literal cannot contain NUL (0x00)
+# characters") — crashing the store. Strip control chars (keeping tab/newline/CR)
+# from every extracted text before it is cached or persisted.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _clean_text(s: str) -> str:
+    """Remove NUL and other C0 control characters so the text is safe to store."""
+    return _CONTROL_CHARS.sub("", s)
+
 # A browser-ish User-Agent — some hosts 403 the default python-requests UA. (It does
 # NOT defeat IP-based bot blocking, e.g. OpenReview's Cloudflare — that's what the
 # arXiv-by-title fallback below is for.)
@@ -105,7 +116,7 @@ def extract(
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f"{hashlib.sha1((ident or title).encode()).hexdigest()[:16]}.md"
     if cache_file.exists() and not force:
-        text = cache_file.read_text(encoding="utf-8")[:_MAX_CHARS]
+        text = _clean_text(cache_file.read_text(encoding="utf-8"))[:_MAX_CHARS]
         return ExtractResult(text, "cache", len(text), str(cache_file))
 
     def _fetch(u: str) -> tuple[str, str]:
@@ -133,7 +144,7 @@ def extract(
     if not text:
         text, method = f"# {title}\n\n{abstract}", "abstract"  # last resort
 
-    text = text[:_MAX_CHARS]
+    text = _clean_text(text)[:_MAX_CHARS]
     cache_file.write_text(text, encoding="utf-8")
     return ExtractResult(text, method, len(text), str(cache_file), source_url)
 
@@ -248,7 +259,7 @@ def extract_from_bytes(data: bytes) -> str:
 
         reader = PdfReader(io.BytesIO(data))
         pages = [(page.extract_text() or "") for page in reader.pages[:60]]
-        return "\n".join(pages).strip()[:_MAX_CHARS]
+        return _clean_text("\n".join(pages).strip())[:_MAX_CHARS]
     except Exception as exc:  # noqa: BLE001 — a malformed PDF yields no text, not a crash
         logger.info("pypdf extraction from bytes failed: %s", exc)
         return ""

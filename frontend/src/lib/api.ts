@@ -45,7 +45,10 @@ async function request<T>(
     } catch {
       /* ignore */
     }
-    throw new ApiError(res.status, detail);
+    // Never surface an empty message: over HTTP/2 `statusText` is always "" and a
+    // non-JSON error body (e.g. a 500 through the proxy) leaves `detail` blank,
+    // which would render as an empty alert box with no explanation.
+    throw new ApiError(res.status, detail || `Request failed (HTTP ${res.status})`);
   }
   if (res.status === 204) return undefined as T;
   if (options.raw) return res as unknown as T;

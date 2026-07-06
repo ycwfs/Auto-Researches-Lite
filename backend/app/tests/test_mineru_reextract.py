@@ -414,3 +414,32 @@ def test_paper_list_surfaces_fulltext_recoverable(auth_client: TestClient) -> No
     papers = auth_client.get(f"/api/projects/{pid}/discovery/papers").json()
     row = next(p for p in papers if p["id"] == paper_id)
     assert row["fulltext_recoverable"] is True  # stuck-but-not-yet-exhausted → recoverable
+
+
+def test_extracted_text_strips_nul_and_control_chars() -> None:
+    """pypdf can emit embedded NUL / C0 control bytes; a Postgres text column rejects
+    NUL, so extraction strips them (keeping tab/newline/CR) before the text is stored."""
+    from app.integrations import mineru
+
+    dirty = "Full\x00 text\x01 with\x0c controls\tand\nnewlines\rkept."
+    clean = mineru._clean_text(dirty)
+    assert "\x00" not in clean and "\x01" not in clean and "\x0c" not in clean
+    assert clean == "Full text with controls\tand\nnewlines\rkept."
+
+
+def test_extract_from_bytes_strips_nul(monkeypatch) -> None:
+    """A user-uploaded PDF whose text layer carries NUL bytes yields clean, storable text
+    (regression: the upload endpoint 500'd on Postgres before this)."""
+    from app.integrations import mineru
+
+    class _Page:
+        def extract_text(self):
+            return "body\x00text"
+
+    class _Reader:
+        def __init__(self, *a, **k):
+            self.pages = [_Page()]
+
+    monkeypatch.setattr("pypdf.PdfReader", _Reader)
+    out = mineru.extract_from_bytes(b"%PDF-1.4 whatever")
+    assert "\x00" not in out and "bodytext" in out
