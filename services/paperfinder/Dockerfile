@@ -8,7 +8,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The sidecar embeds on CPU, so install CPU-only torch first. Otherwise
+# sentence-transformers pulls the multi-GB CUDA build (nvidia-cu* wheels), which
+# bloats the image by ~10GB and can exhaust the host disk on rebuild.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Warm the embedding model into the image so the first request isn't slow and
 # the service needs no model download at runtime.

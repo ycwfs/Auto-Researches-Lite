@@ -41,16 +41,26 @@ def _read(input_path: str | None):
                 yield json.loads(line)
 
 
+# Cap how many ids one collection.get() binds: an unbounded get() fans metadata
+# retrieval into a single `WHERE id IN (...)`, which Chroma's SQLite backend rejects
+# with "too many SQL variables" once the corpus exceeds ~32k rows.
+_GET_CHUNK = 5000
+
+
 def refresh_manifest(collection) -> list[dict]:
     """Recount papers per (venue, year) and persist the manifest the sidecar serves.
 
     Year-granular so the picker and admin can show "CVPR 2026" vs "CVPR 2025"."""
     counts: dict[tuple[str, str], int] = {}
-    got = collection.get(include=["metadatas"])
-    for meta in got.get("metadatas") or []:
-        v = (meta or {}).get("venue", "") or "Unknown"
-        y = str((meta or {}).get("year", "") or "")
-        counts[(v, y)] = counts.get((v, y), 0) + 1
+    all_ids = (collection.get(include=[]) or {}).get("ids") or []
+    # Fetch metadata in id-chunks so no single query exceeds SQLite's bound-parameter
+    # limit (the whole-corpus get() breaks once there are >~32k papers).
+    for i in range(0, len(all_ids), _GET_CHUNK):
+        got = collection.get(ids=all_ids[i : i + _GET_CHUNK], include=["metadatas"])
+        for meta in got.get("metadatas") or []:
+            v = (meta or {}).get("venue", "") or "Unknown"
+            y = str((meta or {}).get("year", "") or "")
+            counts[(v, y)] = counts.get((v, y), 0) + 1
     venues = [
         {"venue": v, "year": y, "count": c} for (v, y), c in sorted(counts.items())
     ]
