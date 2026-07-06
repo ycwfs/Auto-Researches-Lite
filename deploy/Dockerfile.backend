@@ -1,0 +1,28 @@
+# Backend + worker image. Build context is the platform/ directory; the reused
+# Stage-1 pipeline subset is vendored under backend/vendor and bundled in.
+FROM python:3.11-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# fontconfig helps wordcloud/matplotlib render text in the slim image.
+# nodejs/npm + the Claude Code CLI power Channel-B agent tasks (idea generation,
+# Zotero routing) when an AGENT_* / claude_agent key is set; tasks fall back to
+# the standard API path when it is not.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fontconfig nodejs npm git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force
+
+WORKDIR /app
+COPY backend /app
+RUN uv pip install --system -e .
+
+ENV AUTO_RESEARCH_ROOT=/app/vendor \
+    DATA_ROOT=/data \
+    PYTHONUNBUFFERED=1
+RUN mkdir -p /data
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

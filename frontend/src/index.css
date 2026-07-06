@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Dark theme (default). Values are space-separated RGB channels so Tailwind's
+     `<alpha-value>` opacity modifiers keep working. */
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --w: 255 255 255;
+    --ink-950: 7 9 18;
+    --ink-900: 11 14 26;
+    --ink-850: 16 19 31;
+    --ink-800: 21 25 38;
+    --ink-700: 29 34 49;
+    --ink-600: 39 45 63;
+    --ink-500: 58 66 87;
+    --iris-300: 165 180 252;
+    --iris-400: 129 140 248;
+    --iris-500: 99 102 241;
+    --iris-600: 79 70 229;
+    --cyan-400: 34 211 238;
+    --cyan-500: 6 182 212;
+    --mist-100: 231 234 243;
+    --mist-300: 170 178 200;
+    --mist-500: 123 132 153;
+  }
+
+  /* Light / white theme: flip surfaces (ink), text (mist), the themed `white`
+     (so hairline borders + headings stay readable), and darken accent text. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --w: 15 23 42; /* slate-900: borders/headings become dark on white */
+    --ink-950: 247 248 251; /* app background */
+    --ink-900: 255 255 255; /* nav / inputs */
+    --ink-850: 255 255 255; /* cards */
+    --ink-800: 241 243 248;
+    --ink-700: 226 230 238;
+    --ink-600: 203 208 220;
+    --ink-500: 148 156 173;
+    --iris-300: 67 56 202; /* darker indigo for accent text on white */
+    --iris-400: 99 102 241;
+    --iris-500: 99 102 241;
+    --iris-600: 79 70 229;
+    --cyan-400: 14 116 144; /* darker cyan for accent text on white */
+    --cyan-500: 6 182 212;
+    --mist-100: 17 24 39; /* primary text */
+    --mist-300: 51 65 85; /* secondary text */
+    --mist-500: 100 116 139; /* muted text */
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-ink-950 text-mist-100 font-sans antialiased;
+  }
+  ::selection {
+    /* Keep light text on the accent highlight regardless of theme. */
+    background: rgba(99, 102, 241, 0.4);
+    color: #fff;
+  }
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-ink-600 rounded-full border-2 border-solid border-transparent bg-clip-padding;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-500;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-white/[0.06] bg-ink-850/80 shadow-card backdrop-blur;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition
+      focus:outline-none focus-visible:ring-2 focus-visible:ring-iris-400/70 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    /* Solid accent button: force true-white text on both themes. */
+    @apply btn bg-iris-500 hover:bg-iris-400 shadow-glow;
+    color: #fff;
+  }
+  .btn-ghost {
+    @apply btn border border-white/10 bg-white/[0.03] text-mist-100 hover:bg-white/[0.07];
+  }
+  .btn-subtle {
+    @apply btn text-mist-300 hover:text-mist-100 hover:bg-white/[0.05];
+  }
+  .input {
+    @apply w-full rounded-lg border border-white/10 bg-ink-900/80 px-3 py-2 text-sm text-mist-100
+      placeholder:text-mist-500 focus:border-iris-400/60 focus:outline-none focus:ring-2 focus:ring-iris-400/30;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-mist-500;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-xs text-mist-300;
+  }
+}

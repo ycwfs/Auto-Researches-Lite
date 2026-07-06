@@ -1,0 +1,137 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: far
+      POSTGRES_PASSWORD: far
+      POSTGRES_DB: far
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U far"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # localhost-only: containers reach it as `db:5432`; never expose Postgres publicly.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    # Persist the queue (AOF) to a volume so enqueued jobs survive a restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # localhost-only: containers reach it as `redis:6379`; never expose Redis publicly.
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    # Shared image: worker + scheduler reuse it (image: far-backend) so a single
+    # `docker compose build backend` keeps all three on the same code — never a
+    # stale worker running old job logic.
+    image: far-backend:latest
+    # Boot config (JWT_SECRET, CREDENTIAL_SECRET, ENVIRONMENT) loads from ../.env —
+    # see .env.example. Provider keys, MinerU, paper sources, agent limits, etc.
+    # are configured in the in-app Settings panel, not here. The infra values
+    # below override any same-named .env entries so networking stays correct.
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg2://far:far@db:5432/far
+      REDIS_URL: redis://redis:6379/0
+      DATA_ROOT: /data
+      PAPERFINDER_ENDPOINT: http://paperfinder:8100/search
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - fardata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Bound to localhost only — reach the app through the frontend service; this
+    # direct port is for local debugging, never exposed to other machines.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    image: far-backend:latest  # built by the `backend` service — always the same code
+    # Same secrets as backend (incl. the JWT_SECRET-derived Fernet used to
+    # decrypt the model-catalog / integration keys saved in Settings).
+    # Processes WORKER_CONCURRENCY jobs in parallel; also scalable horizontally
+    # with `docker compose up -d --scale worker=N`.
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg2://far:far@db:5432/far
+      REDIS_URL: redis://redis:6379/0
+      DATA_ROOT: /data
+      PAPERFINDER_ENDPOINT: http://paperfinder:8100/search
+    command: python -m app.workers.run_worker
+    volumes:
+      - fardata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    image: far-backend:latest  # built by the `backend` service — always the same code
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg2://far:far@db:5432/far
+      REDIS_URL: redis://redis:6379/0
+      DATA_ROOT: /data
+    command: python -m app.scheduler.run_scheduler
+    volumes:
+      - fardata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Semantic-search sidecar (ICLR26_Paper_Finder). Heavy ML deps + the ~1.5GB
+  # ChromaDB bundle live here only. Populate the volume once with:
+  #   docker compose run --rm paperfinder bash download_data.sh
+  paperfinder:
+    build:
+      context: ../services/paperfinder
+    environment:
+      PAPERFINDER_DB_PATH: /data/ICLR2026
+    volumes:
+      - paperfinderdata:/data
+    expose:
+      - "8100"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    depends_on:
+      - backend
+    # Local single-user app: bound to localhost only. Open http://127.0.0.1:8080
+    # (or ${FRONTEND_PORT}) in your browser on this machine.
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+
+volumes:
+  pgdata:
+  fardata:
+  redisdata:
+  paperfinderdata:

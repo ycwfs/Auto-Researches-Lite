@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+chromadb>=0.5
+sentence-transformers>=3.0
+gdown>=5.0
+requests>=2.31
