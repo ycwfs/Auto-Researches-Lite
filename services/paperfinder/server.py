@@ -71,7 +71,7 @@ _DISABLED_LOCK = threading.Lock()
 
 
 def _collection():
-    return _client.get_collection(name=COLLECTION, embedding_function=_embed_fn)
+    return _client.get_or_create_collection(name=COLLECTION, embedding_function=_embed_fn)
 
 
 def _parse_keywords(raw) -> list[str]:
