@@ -20,6 +20,7 @@ from app.models.project import Project
 from app.models.user import User
 from app.services.quota import can_run_discovery
 from app.workers.queue import submit
+from app.workers.reconcile import reap_stale_jobs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("far.scheduler")
@@ -132,13 +133,30 @@ def _run_tick() -> None:
         db.close()
 
 
+def _run_reap() -> None:
+    """Flip jobs stuck at queued/running (worker crashed or RQ abandoned them without
+    the Postgres row ever being told) to failed, so the UI stops showing a job that
+    will never move again. Only run once at worker-container startup otherwise —
+    this periodic sweep catches staleness that develops mid-life."""
+    db = SessionLocal()
+    try:
+        n = reap_stale_jobs(db)
+        if n:
+            logger.info("reaped %d stale job(s)", n)
+    except Exception:  # noqa: BLE001
+        logger.exception("stale-job reap failed")
+    finally:
+        db.close()
+
+
 def main() -> None:
     from apscheduler.schedulers.blocking import BlockingScheduler
 
     init_db()
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(_run_tick, "interval", seconds=60, next_run_time=datetime.now(timezone.utc))
-    logger.info("Semi-Auto Research scheduler started (60s tick).")
+    scheduler.add_job(_run_reap, "interval", minutes=5)
+    logger.info("Semi-Auto Research scheduler started (60s tick, 5m stale-job reap).")
     scheduler.start()
 
 

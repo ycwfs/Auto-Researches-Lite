@@ -18,6 +18,13 @@ from app.core.config import settings
 
 logger = logging.getLogger("far.llm")
 
+# Neither the anthropic nor openai SDK caps a hung request by default (they fall back
+# to very long or no timeouts), which can block a worker process well past RQ's own
+# job_timeout — a hang here becomes unkillable since cancellation is only checked
+# between LLM calls, not during one. Keep this comfortably above real completion
+# latency (including reasoning models) but well under RQ's 3600s job_timeout.
+_LLM_REQUEST_TIMEOUT = 120.0
+
 
 @dataclass
 class LLMConfig:
@@ -50,7 +57,10 @@ def _complete_anthropic(cfg: LLMConfig, prompt: str, system: str, max_tokens: in
     import anthropic
 
     client = anthropic.Anthropic(
-        api_key=cfg.api_key, **({"base_url": cfg.base_url} if cfg.base_url else {})
+        api_key=cfg.api_key,
+        timeout=_LLM_REQUEST_TIMEOUT,
+        max_retries=1,
+        **({"base_url": cfg.base_url} if cfg.base_url else {}),
     )
     kwargs: dict[str, Any] = dict(
         model=cfg.model or "claude-sonnet-4-6",
@@ -81,7 +91,10 @@ def _complete_openai(cfg: LLMConfig, prompt: str, system: str, max_tokens: int) 
     from openai import OpenAI
 
     client = OpenAI(
-        api_key=cfg.api_key, **({"base_url": cfg.base_url} if cfg.base_url else {})
+        api_key=cfg.api_key,
+        timeout=_LLM_REQUEST_TIMEOUT,
+        max_retries=1,
+        **({"base_url": cfg.base_url} if cfg.base_url else {}),
     )
     kwargs: dict[str, Any] = dict(
         model=cfg.model or "gpt-4o-mini",
