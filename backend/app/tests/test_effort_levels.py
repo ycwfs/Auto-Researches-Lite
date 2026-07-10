@@ -125,3 +125,42 @@ def test_channel_a_openai_reasoning_effort_clamped(level, expected, monkeypatch)
     out = llm_mod._complete_openai(cfg, "hi", "", 1000)
     assert out == "ok"
     assert captured["reasoning_effort"] == expected
+
+
+# ---- Request timeout scales with reasoning effort --------------------------------
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [("off", 120.0), ("low", 120.0), ("medium", 120.0),
+     ("high", 300.0), ("xhigh", 600.0), ("max", 600.0)],
+)
+def test_request_timeout_scales_with_effort(level, expected):
+    """A flat 120s killed legitimate slow max-effort completions (mock summaries were
+    silently stored); reasoning-heavy levels get a longer — still bounded — window."""
+    from app.services.llm import LLMConfig, _request_timeout
+
+    assert _request_timeout(LLMConfig(provider="claude", reasoning=level)) == expected
+
+
+def test_anthropic_client_gets_effort_scaled_timeout(monkeypatch):
+    """The scaled timeout actually reaches the Anthropic client constructor."""
+    import anthropic
+
+    from app.services.llm import LLMConfig, _complete_anthropic
+
+    seen: dict = {}
+
+    class _Msgs:
+        def create(self, **kwargs):
+            class _R:
+                content = [type("B", (), {"type": "text", "text": "4"})()]
+            return _R()
+
+    class _Client:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    cfg = LLMConfig(provider="claude", api_key="k", reasoning="max")
+    _complete_anthropic(cfg, "2+2?", "sys", 100)
+    assert seen["timeout"] == 600.0 and seen["max_retries"] == 1

@@ -21,9 +21,16 @@ logger = logging.getLogger("far.llm")
 # Neither the anthropic nor openai SDK caps a hung request by default (they fall back
 # to very long or no timeouts), which can block a worker process well past RQ's own
 # job_timeout — a hang here becomes unkillable since cancellation is only checked
-# between LLM calls, not during one. Keep this comfortably above real completion
-# latency (including reasoning models) but well under RQ's 3600s job_timeout.
+# between LLM calls, not during one. But the cap must scale with reasoning effort: at
+# xhigh/max a model can legitimately think for minutes (a flat 120s killed the slowest
+# summary calls, silently storing mock summaries), so give reasoning-heavy calls a
+# longer — still bounded — window. All values stay well under RQ's 3600s job_timeout.
 _LLM_REQUEST_TIMEOUT = 120.0
+_EFFORT_TIMEOUTS = {"high": 300.0, "xhigh": 600.0, "max": 600.0}
+
+
+def _request_timeout(cfg: "LLMConfig") -> float:
+    return _EFFORT_TIMEOUTS.get(cfg.reasoning, _LLM_REQUEST_TIMEOUT)
 
 
 @dataclass
@@ -58,7 +65,7 @@ def _complete_anthropic(cfg: LLMConfig, prompt: str, system: str, max_tokens: in
 
     client = anthropic.Anthropic(
         api_key=cfg.api_key,
-        timeout=_LLM_REQUEST_TIMEOUT,
+        timeout=_request_timeout(cfg),
         max_retries=1,
         **({"base_url": cfg.base_url} if cfg.base_url else {}),
     )
@@ -92,7 +99,7 @@ def _complete_openai(cfg: LLMConfig, prompt: str, system: str, max_tokens: int) 
 
     client = OpenAI(
         api_key=cfg.api_key,
-        timeout=_LLM_REQUEST_TIMEOUT,
+        timeout=_request_timeout(cfg),
         max_retries=1,
         **({"base_url": cfg.base_url} if cfg.base_url else {}),
     )
@@ -170,6 +177,13 @@ class LLMService:
         raw = self._complete(prompt, max_tokens=1200)  # avoid a truncated-JSON → mock fallback
         data = _parse_json(raw)
         if not data:
+            # A failed call already warned in _complete (raw = ""); a non-empty raw that
+            # doesn't parse would otherwise store a mock summary with NO trace — log it.
+            logger.warning(
+                "paper summary fell back to mock (%s; raw len %d): %s",
+                "provider call failed" if not raw else "unparseable JSON",
+                len(raw), (paper.get("title") or "")[:80],
+            )
             return _mock_summary(paper, keywords)
         return {
             "summary_en": str(data.get("summary_en", "")).strip(),
